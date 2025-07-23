@@ -3,4 +3,4 @@ flask-cors
 requests
 python-dotenv
 openai
-vercel-wsgi
+gunicorn
