@@ -213,91 +213,169 @@ def analyze_image():
             ]
         }
 
-        try:
-            logger.info("Sending request to OpenAI...")
-            logger.debug(f"Using model: {payload['model']}")
-            
-            response = requests.post(
-                url, 
-                headers=headers, 
-                json=payload,
-                # timeout=30
-            )
-            
-            if not response.ok:
-                logger.error(f"OpenAI error: {response.text}")
-                error_data = response.json()
-                error_message = error_data.get('error', {}).get('message', 'OpenAI service error')
-                return jsonify({
-                    'success': False,
-                    'error': error_message
-                }), response.status_code
-
-            response_data = response.json()
-            content = response_data['choices'][0]['message']['content']
-            
-            if not content:
-                logger.error("OpenAI returned empty content")
-                return jsonify({
-                    'success': False,
-                    'error': 'OpenAI returned empty response'
-                }), 500
-            
-            logger.info(f"Raw OpenAI response: {content}")
-
-            # Parse JSON response
+        # Retry mechanism - attempt request up to 2 times
+        max_retries = 2
+        last_error = None
+        
+        for attempt in range(max_retries):
             try:
-                # Clean the response text
-                cleaned_content = content.strip()
+                logger.info(f"Sending request to OpenAI... (attempt {attempt + 1}/{max_retries})")
+                logger.debug(f"Using model: {payload['model']}")
                 
-                # Remove any markdown code blocks
-                cleaned_content = re.sub(r'```json\s*', '', cleaned_content)
-                cleaned_content = re.sub(r'```\s*$', '', cleaned_content)
+                response = requests.post(
+                    url, 
+                    headers=headers, 
+                    json=payload,
+                    # timeout=30
+                )
                 
-                # Fix common JSON formatting issues
-                # Replace unquoted values like sixty_something with proper strings
-                cleaned_content = re.sub(r':\s*([a-zA-Z_]+[a-zA-Z0-9_]*)\s*,', r': "\1",', cleaned_content)
-                cleaned_content = re.sub(r':\s*([a-zA-Z_]+[a-zA-Z0-9_]*)\s*}', r': "\1"}', cleaned_content)
-                
-                # Try to find JSON object
-                json_match = re.search(r'\{.*\}', cleaned_content, re.DOTALL)
-                if json_match:
-                    json_str = json_match.group(0)
-                    analysis_data = json.loads(json_str)
+                if not response.ok:
+                    logger.error(f"OpenAI error (attempt {attempt + 1}): {response.text}")
+                    error_data = response.json()
+                    error_message = error_data.get('error', {}).get('message', 'OpenAI service error')
+                    last_error = {
+                        'error': error_message,
+                        'status_code': response.status_code
+                    }
                     
-                    logger.info("Successfully parsed JSON response")
-                    return jsonify({
-                        'success': True,
-                        'analysis': analysis_data
-                    })
+                    # If this is not the last attempt, continue to retry
+                    if attempt < max_retries - 1:
+                        logger.info(f"Retrying... (attempt {attempt + 2}/{max_retries})")
+                        continue
+                    else:
+                        return jsonify({
+                            'success': False,
+                            'error': error_message
+                        }), response.status_code
+
+                response_data = response.json()
+                content = response_data['choices'][0]['message']['content']
+                
+                if not content:
+                    logger.error(f"OpenAI returned empty content (attempt {attempt + 1})")
+                    last_error = {
+                        'error': 'OpenAI returned empty response',
+                        'status_code': 500
+                    }
+                    
+                    # If this is not the last attempt, continue to retry
+                    if attempt < max_retries - 1:
+                        logger.info(f"Retrying... (attempt {attempt + 2}/{max_retries})")
+                        continue
+                    else:
+                        return jsonify({
+                            'success': False,
+                            'error': 'OpenAI returned empty response'
+                        }), 500
+                
+                logger.info(f"Raw OpenAI response (attempt {attempt + 1}): {content}")
+
+                # Parse JSON response
+                try:
+                    # Clean the response text
+                    cleaned_content = content.strip()
+                    
+                    # Remove any markdown code blocks
+                    cleaned_content = re.sub(r'```json\s*', '', cleaned_content)
+                    cleaned_content = re.sub(r'```\s*$', '', cleaned_content)
+                    
+                    # Fix common JSON formatting issues
+                    # Replace unquoted values like sixty_something with proper strings
+                    cleaned_content = re.sub(r':\s*([a-zA-Z_]+[a-zA-Z0-9_]*)\s*,', r': "\1",', cleaned_content)
+                    cleaned_content = re.sub(r':\s*([a-zA-Z_]+[a-zA-Z0-9_]*)\s*}', r': "\1"}', cleaned_content)
+                    
+                    # Try to find JSON object
+                    json_match = re.search(r'\{.*\}', cleaned_content, re.DOTALL)
+                    if json_match:
+                        json_str = json_match.group(0)
+                        analysis_data = json.loads(json_str)
+                        
+                        logger.info(f"Successfully parsed JSON response (attempt {attempt + 1})")
+                        return jsonify({
+                            'success': True,
+                            'analysis': analysis_data
+                        })
+                    else:
+                        logger.error(f"No JSON object found in response (attempt {attempt + 1})")
+                        last_error = {
+                            'error': 'No valid JSON found in AI response',
+                            'raw_response': content,
+                            'status_code': 500
+                        }
+                        
+                        # If this is not the last attempt, continue to retry
+                        if attempt < max_retries - 1:
+                            logger.info(f"Retrying... (attempt {attempt + 2}/{max_retries})")
+                            continue
+                        else:
+                            return jsonify({
+                                'success': False,
+                                'error': 'No valid JSON found in AI response',
+                                'raw_response': content
+                            }), 500
+                        
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSON parsing error (attempt {attempt + 1}): {str(e)}")
+                    last_error = {
+                        'error': f'Failed to parse AI response as JSON: {str(e)}',
+                        'raw_response': content,
+                        'status_code': 500
+                    }
+                    
+                    # If this is not the last attempt, continue to retry
+                    if attempt < max_retries - 1:
+                        logger.info(f"Retrying... (attempt {attempt + 2}/{max_retries})")
+                        continue
+                    else:
+                        return jsonify({
+                            'success': False,
+                            'error': f'Failed to parse AI response as JSON: {str(e)}',
+                            'raw_response': content
+                        }), 500
+                
+                # If we reach here, the request was successful
+                break
+                    
+            except Timeout:
+                logger.error(f"OpenAI request timed out (attempt {attempt + 1})")
+                last_error = {
+                    'error': 'Analysis timeout. Please try again.',
+                    'status_code': 504
+                }
+                
+                # If this is not the last attempt, continue to retry
+                if attempt < max_retries - 1:
+                    logger.info(f"Retrying... (attempt {attempt + 2}/{max_retries})")
+                    continue
                 else:
-                    logger.error("No JSON object found in response")
                     return jsonify({
                         'success': False,
-                        'error': 'No valid JSON found in AI response',
-                        'raw_response': content
-                    }), 500
-                    
-            except json.JSONDecodeError as e:
-                logger.error(f"JSON parsing error: {str(e)}")
-                return jsonify({
-                    'success': False,
-                    'error': f'Failed to parse AI response as JSON: {str(e)}',
-                    'raw_response': content
-                }), 500
+                        'error': 'Analysis timeout. Please try again.'
+                    }), 504
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Request to OpenAI failed (attempt {attempt + 1}): {str(e)}")
+                last_error = {
+                    'error': 'Service communication error',
+                    'status_code': 502
+                }
                 
-        except Timeout:
-            logger.error("OpenAI request timed out")
+                # If this is not the last attempt, continue to retry
+                if attempt < max_retries - 1:
+                    logger.info(f"Retrying... (attempt {attempt + 2}/{max_retries})")
+                    continue
+                else:
+                    return jsonify({
+                        'success': False,
+                        'error': 'Service communication error'
+                    }), 502
+        
+        # If we reach here, all attempts failed
+        if last_error:
             return jsonify({
                 'success': False,
-                'error': 'Analysis timeout. Please try again.'
-            }), 504
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Request to OpenAI failed: {str(e)}")
-            return jsonify({
-                'success': False,
-                'error': 'Service communication error'
-            }), 502
+                'error': last_error['error'],
+                'raw_response': last_error.get('raw_response')
+            }), last_error['status_code']
 
     except Exception as e:
         logger.error(f"Server Error: {str(e)}", exc_info=True)
