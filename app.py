@@ -28,6 +28,11 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 def home():
     return jsonify({"status": "ok", "message": "Server is running"})
 
+@app.route('/favicon.ico')
+@app.route('/favicon.png')
+def favicon():
+    return '', 204  # No content response
+
 @app.route('/analyze', methods=['POST', 'OPTIONS'])
 def analyze_image():
     # Handle preflight requests
