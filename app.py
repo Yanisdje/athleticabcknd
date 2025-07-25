@@ -19,7 +19,7 @@ load_dotenv()
 app = Flask(__name__)
 
 # Configure CORS
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 # Get API key from environment variable
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
